@@ -9,10 +9,12 @@ import json
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 import motor as M
 
 st.set_page_config(page_title="Radar Chile–Bolivia · L3B", page_icon="🛰️", layout="wide")
+components.html("<script>const d=window.parent.document.documentElement;d.lang='es';d.setAttribute('translate','no');d.classList.add('notranslate');</script>", height=0)
 
 NAVY, ORANGE, GREY = "#0E1C34", "#F15A0F", "#5B6B78"
 SEM = {"Verde": "#2C8A4B", "Amarillo": "#C98A00", "Rojo": "#C4382A"}
@@ -152,9 +154,9 @@ with tabs[0]:
     bar.update_layout(barmode="stack", height=420, yaxis=dict(autorange="reversed"), legend=dict(orientation="h", y=-0.15),
                       margin=dict(l=0, r=10, t=30, b=0), title="Contenedores por puerto y flujo", plot_bgcolor="white")
     a, b = st.columns([1, 1.25])
-    a.plotly_chart(fig, width="stretch")
+    a.plotly_chart(fig, use_container_width=True)
     with b:
-        st.plotly_chart(bar, width="stretch")
+        st.plotly_chart(bar, use_container_width=True)
         tab = por.assign(Puerto=por.puerto_code.map(M.PN)).set_index("Puerto").reindex(orden)[["n", "rojos", "amarillos"]]
         tab.columns = ["Contenedores", "Rojos", "Amarillos"]
         st.dataframe(tab, width="stretch")
@@ -173,7 +175,7 @@ with tabs[1]:
     for f in ["Tránsito a Bolivia", "Exportación boliviana", "Vacío"]:
         if f in g: fb.add_bar(x=g.index, y=g[f], name=f, marker_color=FLUJO_COL[f])
     fb.update_layout(barmode="group", height=360, title="Carga y vacíos de Bolivia por puerto chileno", plot_bgcolor="white", margin=dict(t=40, l=0, r=0, b=0))
-    st.plotly_chart(fb, width="stretch")
+    st.plotly_chart(fb, use_container_width=True)
     st.markdown("**Alertas relacionadas con Bolivia**")
     st.dataframe(bo[bo.semaforo != "Verde"].sort_values("score", ascending=False)[["semaforo", "score", "puerto", "contenedor", "flujo", "ext_nombre", "destino", "motivo"]],
                  width="stretch", hide_index=True,
@@ -207,7 +209,7 @@ with tabs[2]:
                                        color=ncol, pad=14, thickness=16), textfont=dict(color=NAVY, size=12),
                              link=dict(source=s, target=t, value=v, color=col)))
     sk.update_layout(height=560, margin=dict(l=0, r=0, t=30, b=0), title="Vacíos: región de embarque → puerto chileno → destino (rojo = caliente)")
-    st.plotly_chart(sk, width="stretch")
+    st.plotly_chart(sk, use_container_width=True)
     st.markdown("**Vacíos con alertas**")
     st.dataframe(va[va.semaforo != "Verde"].sort_values("score", ascending=False)[["semaforo", "score", "puerto", "contenedor", "ext_nombre", "destino", "deposito", "motivo"]],
                  width="stretch", hide_index=True,
