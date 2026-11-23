@@ -73,6 +73,8 @@ REGLAS = {
                            why="Dice A, lleva B: el peso declarado no calza con el rango normal de esa mercancía."),
     "sin_clausula_bo": dict(w=40, label="Tránsito a Bolivia sin cláusula en el BL", docs="Manifiesto",
                             why="Por Iquique, sin la cláusula 'Cargo in Transit to Bolivia' la carga queda como consumo chileno."),
+    "destino_bolivia": dict(w=45, label="Destino cambiado a última hora hacia Bolivia", docs="Booking",
+                            why="Un cambio tardío hacia una ciudad boliviana puede buscar el tránsito para evitar el control de consumo chileno, o desviar la carga dentro del corredor."),
     "lugar_llenado": dict(w=35, label="Llenado en un lugar distinto al declarado", docs="Booking vs terminal", why="Se llenó en otro sitio, no en la planta declarada."),
     "destino_cambiado": dict(w=35, label="Destino final cambiado a última hora", docs="Booking", why="El destino cambió poco antes del arribo o del cierre."),
     "peso_vgm": dict(w=35, label="VGM difiere del peso manifestado", docs="Plano vs manifiesto", why="El pesaje (VGM) no calza con el peso declarado más la tara."),
@@ -217,7 +219,8 @@ def generar(seed=44):
     obs = [("CLARI", "bimp", "vgm", 2), ("CLARI", "bexp", "mod", 2), ("CLIQQ", "bimp", "clausula", 2), ("CLIQQ", "imp", "vgm", 1),
            ("CLMJS", "imp", "pod", 1), ("CLVAP", "imp", "vgm", 2), ("CLVAP", "imp", "pod", 1), ("CLVAP", "exp", "mod", 2),
            ("CLSAI", "imp", "vgm", 3), ("CLSAI", "exp", "llenado", 1), ("CLSAI", "imp", "pod", 2), ("CLSVE", "exp", "vgm", 2),
-           ("CLSVE", "exp", "mod", 1), ("CLLQN", "exp", "vgm", 2), ("CLCNL", "exp", "vgm", 2), ("CLCNL", "exp", "mod", 1)]
+           ("CLSVE", "exp", "mod", 1), ("CLLQN", "exp", "vgm", 2), ("CLCNL", "exp", "vgm", 2), ("CLCNL", "exp", "mod", 1),
+           ("CLIQQ", "bimp", "destino_bo", 1)]
     for port, fl, k, n in obs:
         for _ in range(n):
             z = take(port, fl, ok)
@@ -226,6 +229,7 @@ def generar(seed=44):
             elif k == "pod": z["pod_m"] = pick([c for c in ("CLSAI", "CLVAP", "CLCNL") if c != port])
             elif k == "llenado": z["llen_reg"] = "Depósito de tercero San Antonio"
             elif k == "clausula": z["clausula"] = "NO"
+            elif k == "destino_bo": z.update(dest_orig=port, cambio_h=rint(18, 36))  # de consumo en Chile a tránsito a Bolivia
 
     # --- Emitir documentos ---
     plano, manif, book, term, vac = [], [], [], [], []
@@ -328,7 +332,7 @@ def analizar(docs, params=None):
                     add("sin_clausula_bo", "Consignatario boliviano, BL sin la cláusula 'Cargo in Transit to Bolivia'")
             if b is not None:
                 if b["destino_original"] != b["destino_final"] and not _blank(b.get("cambio_destino_h_antes")) and float(b["cambio_destino_h_antes"]) < P["ventana_h"]:
-                    add("destino_cambiado", f"Destino final cambiado de {nombre_puerto(b['destino_original'])} a {nombre_puerto(b['destino_final'])} {int(b['cambio_destino_h_antes'])} h antes")
+                    add("destino_bolivia" if str(b["destino_final"]).startswith("BO") else "destino_cambiado",f"Destino final cambiado de {nombre_puerto(b['destino_original'])} a {nombre_puerto(b['destino_final'])} {int(b['cambio_destino_h_antes'])} h antes")
                 if sale and t is not None and not _blank(b.get("lugar_llenado_declarado")) and b["lugar_llenado_declarado"] != t.get("lugar_llenado_registrado"):
                     add("lugar_llenado", f"Declarado: {b['lugar_llenado_declarado']} · registrado: {t.get('lugar_llenado_registrado')}")
             if ext in roja:
@@ -366,8 +370,10 @@ def analizar(docs, params=None):
                 if not _blank(v.get("deposito")) and v["deposito"] not in deps:
                     add("deposito_externo", f"{v['deposito']} en vez de un depósito de la línea")
         hits.sort(key=lambda h: -h["puntos"])
-        score = min(100, sum(h["puntos"] for h in hits))
+        bruto = sum(h["puntos"] for h in hits)
+        score = min(100, bruto)
         documental = any(h["id"] not in CONTEXTO for h in hits)
+        tope = not documental and score > P["umbral_amarillo"]
         if not documental:  # sin inconsistencia documental nunca pasa de verde
             score = min(score, P["umbral_amarillo"])
         sem = "Rojo" if score > P["umbral_rojo"] else "Amarillo" if score > P["umbral_amarillo"] else "Verde"
@@ -375,10 +381,30 @@ def analizar(docs, params=None):
                         flujo=flujo, ext=ext, ext_nombre=nombre_puerto(ext), region=EXT.get(ext, ("", "Otro"))[1],
                         cliente=cli, tipo_cliente=tipo_cli, mercancia=merc or ("Vacío" if not llena else "—"), destino=nombre_puerto(dest),
                         bolivia=flujo in ("Tránsito a Bolivia", "Exportación boliviana") or str(dest).startswith("BO") or str(dest) in BOLIVIA.values(),
-                        score=int(score), semaforo=sem, alerta=documental or sem != "Verde",
+                        score=int(score), score_bruto=int(bruto), tope=bool(tope), semaforo=sem, alerta=documental or sem != "Verde",
                         motivo=" · ".join(h["regla"] for h in hits if h["puntos"] > 10) or ("—" if not hits else hits[0]["regla"]),
                         hits=hits, n_hits=len(hits)))
     return pd.DataFrame(out)
+
+
+def explicar(x, params=None):
+    """Frase corta que explica por qué el contenedor quedó en su color."""
+    P = {**PARAMS_DEF, **(params or {})}
+    ua, ur = P["umbral_amarillo"], P["umbral_rojo"]
+    hits = list(x["hits"])
+    if not hits:
+        return "Verde: ningún cruce con observaciones."
+    suma = " + ".join(f"{h['puntos']} ({h['regla']})" for h in hits)
+    total = f"{suma} = {x['score_bruto']}" if len(hits) > 1 else suma
+    if x.get("tope"):
+        return (f"Verde: {total}, pero sin inconsistencia documental el score se limita a {ua}. "
+                "Origen o perfil del cliente solos no levantan alerta.")
+    tope100 = " (tope 100)" if x["score_bruto"] > 100 else ""
+    if x["semaforo"] == "Rojo":
+        return f"Rojo: {total}{tope100} → supera el umbral rojo ({ur})."
+    if x["semaforo"] == "Amarillo":
+        return f"Amarillo: {total} → sobre {ua}, bajo el umbral rojo ({ur})."
+    return f"Verde: {total} → no supera {ua}."
 
 
 def ficha(docs, contenedor):

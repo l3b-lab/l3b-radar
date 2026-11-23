@@ -14,6 +14,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import motor as M
+import gestion as G
 
 st.set_page_config(page_title="Radar Chile–Bolivia · L3B", page_icon="🛰️", layout="wide")
 components.html("<script>const d=window.parent.document.documentElement;d.lang='es';d.setAttribute('translate','no');d.classList.add('notranslate');</script>", height=0)
@@ -95,13 +96,21 @@ st.markdown(f"""
 .hit {{border:1px solid #E3E7EC; border-left:5px solid var(--c); border-radius:6px; padding:.5rem .7rem; margin-bottom:.45rem}}
 .hit b {{color:{NAVY}}} .hit small {{color:{GREY}}}
 .pill {{display:inline-block; padding:2px 10px; border-radius:12px; color:white; font-weight:700; font-size:.85rem}}
+.expl {{background:#F4F6F8; border-radius:6px; padding:.45rem .7rem; font-size:.9rem; color:{NAVY}; margin:.4rem 0 .6rem}}
+.hist {{font-size:.82rem; color:{GREY}; border-left:2px solid #E3E7EC; padding:0 0 .35rem .6rem; margin-left:.2rem}}
+.hist b {{color:{NAVY}}}
+.l3b-banner {{position:fixed; bottom:0; left:0; right:0; z-index:999990; background:{NAVY}; color:#fff; text-align:center;
+  font:700 12px Arial, sans-serif; letter-spacing:.05em; padding:7px 10px; box-shadow:0 -2px 8px rgba(0,0,0,.15)}}
+.l3b-banner span {{color:{ORANGE}}}
+.block-container {{padding-bottom:3.5rem}}
 </style>
+<div class="l3b-banner"><span>PILOTO L3B</span> · NO ES UNA HERRAMIENTA OFICIAL DE MSC · <span>DATOS SIMULADOS</span></div>
 <div class="l3b-head">{LOGO}<div><p class="l3b-sub" style="margin:0">L3B · LOGISTIC LIVING LAB · WWW.L3B.CL</p>
 <p style="margin:0;font-size:1.9rem;font-weight:700;color:{NAVY};line-height:1.2">Radar Chile–Bolivia</p></div>
 <div style="margin-left:auto;text-align:center"><div style="font-size:.78rem;color:{GREY};margin-bottom:4px">👤 <b style="color:{NAVY}">{st.session_state["usuario"]}</b></div><div style="font-size:.7rem;letter-spacing:.12em;color:{GREY};font-weight:700">PROPUESTA PARA</div>
 <img src="{MSC_LOGO}" alt="MSC" style="height:54px"></div></div>
-<div class="l3b-note"><b>Piloto con datos simulados.</b> Naves, clientes, BL, sellos y contenedores son ficticios.
-El radar cruza plano (BAPLIE), manifiesto, bookings, registro de terminal y listado de vacíos, y prioriza: no acusa. Demo de L3B: no es una herramienta oficial de MSC.</div>
+<div class="l3b-note"><b>Piloto L3B · no es una herramienta oficial de MSC · datos simulados.</b> Naves, clientes, BL, sellos y contenedores son ficticios.
+El radar cruza plano (BAPLIE), manifiesto, bookings, registro de terminal y listado de vacíos, y prioriza: no acusa.</div>
 """, unsafe_allow_html=True)
 
 
@@ -116,9 +125,20 @@ def correr(docs, params_json):
     return M.analizar(docs, json.loads(params_json))
 
 
-def a_excel(dfs):
+AVISO = pd.DataFrame({"AVISO": [
+    "PILOTO L3B · Logistic Living Lab · www.l3b.cl",
+    "NO es una herramienta oficial de MSC.",
+    "Todos los datos son SIMULADOS: naves, clientes, BL, sellos y contenedores son ficticios.",
+    "El radar prioriza revisiones; no acusa. Una alerta no implica irregularidad.",
+]})
+
+
+def a_excel(dfs, aviso=True):
     b = io.BytesIO()
     with pd.ExcelWriter(b, engine="openpyxl") as w:
+        if aviso:
+            AVISO.to_excel(w, sheet_name="LEEME", index=False)
+            w.sheets["LEEME"].column_dimensions["A"].width = 95
         for k, v in dfs.items():
             v.to_excel(w, sheet_name=k[:31], index=False)
     return b.getvalue()
@@ -134,14 +154,17 @@ with st.sidebar:
     if fuente == "Semana simulada":
         seed = st.number_input("Semilla del escenario", 1, 9999, 44, help="44 = escenario de la presentación. Otro número = otra semana ficticia.")
         docs = docs_simulados(int(seed))
+        clave = f"sim-{int(seed)}"
     else:
         up = st.file_uploader("Excel con hojas: " + ", ".join(M.DOCS), type=["xlsx"])
         if up is None:
             st.info("Descarga la plantilla (semana simulada), modifícala y súbela.")
             docs = docs_simulados(44)
+            clave, seed = "sim-44", 44
         else:
             try:
                 docs = M.leer_excel(up)
+                clave, seed = f"xlsx-{up.name}-{up.size}", None
                 st.success(f"{len(docs['plano']):,} contenedores leídos".replace(",", "."))
             except Exception as e:
                 st.error(f"No pude leer el archivo: {e}")
@@ -164,6 +187,27 @@ with st.sidebar:
     params = dict(lista_roja=roja, umbral_amarillo=u_am, umbral_rojo=u_ro, tol_vgm_pct=tol_vgm, tol_vacio_kg=tol_vac, ventana_h=ventana, pesos=pesos)
 
 res = correr(docs, json.dumps(params, sort_keys=True))
+USUARIO = st.session_state["usuario"]
+
+
+# ---------------------------------------------------------------- gestión (demo: memoria compartida del servidor)
+@st.cache_resource
+def almacen():
+    return {}
+
+
+GESTIONES = almacen()
+if clave not in GESTIONES:
+    GESTIONES[clave] = G.simular(res, seed) if seed is not None else {}
+GEST = G.registro(GESTIONES[clave], res)
+with st.sidebar:
+    st.header("Gestión")
+    st.caption("Demo: la gestión se comparte entre los usuarios conectados y parte con una semana simulada de trabajo.")
+    if st.button("↺ Reiniciar gestión de la demo", use_container_width=True):
+        GESTIONES.pop(clave, None)
+        st.rerun()
+
+t = res.merge(G.tabla(GEST), on="contenedor", how="left")
 COLS_ES = {"semaforo": "Semáforo", "puerto": "Puerto", "contenedor": "Contenedor", "flujo": "Flujo", "destino": "Destino", "cliente": "Cliente",
            "tipo_cliente": "Tipo cliente", "mercancia": "Mercancía", "deposito": "Depósito", "motivo": st.column_config.TextColumn("Por qué", width="large"),
            "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d")}
@@ -179,7 +223,7 @@ k[4].metric("Vacíos", fmt((res.flujo == "Vacío").sum()))
 nr, na = (res.semaforo == "Rojo").sum(), (res.semaforo == "Amarillo").sum()
 k[5].metric("🔴 Calientes", fmt(nr), f"{fmt(na)} en amarillo", delta_color="off")
 
-tabs = st.tabs(["🗺️ Panorama", "🇧🇴 Bolivia", "📦 Vacíos", "🔥 Lista caliente", "📄 Documentos", "⚙️ Reglas"])
+tabs = st.tabs(["🗺️ Panorama", "🇧🇴 Bolivia", "📦 Vacíos", "🔥 Lista caliente", "👤 Mi gestión", "📊 Seguimiento semanal", "📄 Documentos", "⚙️ Reglas"])
 
 # ---------------------------------------------------------------- Panorama
 with tabs[0]:
@@ -260,15 +304,15 @@ with tabs[2]:
     dcat = ["Depósito de la línea", "Bolivia vía Arica", "Bolivia vía Iquique", "Depósito externo", "Bolivia fuera de ruta"]
     nodes = regs + ports + dcat
     ix = {n: i for i, n in enumerate(nodes)}
-    s, t, v, col = [], [], [], []
+    src, tgt, val, col = [], [], [], []
     for (a_, b_, h), n in va.groupby(["emb_reg", "puerto", "caliente"]).size().items():
-        s.append(ix[a_]); t.append(ix[b_]); v.append(n); col.append("rgba(196,56,42,.85)" if h else "rgba(237,161,0,.35)")
+        src.append(ix[a_]); tgt.append(ix[b_]); val.append(n); col.append("rgba(196,56,42,.85)" if h else "rgba(237,161,0,.35)")
     for (a_, b_, h), n in va.groupby(["puerto", "dest_cat", "caliente"]).size().items():
-        s.append(ix[a_]); t.append(ix[b_]); v.append(n); col.append("rgba(196,56,42,.85)" if h else "rgba(14,28,52,.18)")
+        src.append(ix[a_]); tgt.append(ix[b_]); val.append(n); col.append("rgba(196,56,42,.85)" if h else "rgba(14,28,52,.18)")
     ncol = ["#5B6B78"] * len(regs) + [NAVY] * len(ports) + ["#2C8A4B", "#1BAF7A", "#C98A00", "#C4382A", "#C4382A"]
     sk = go.Figure(go.Sankey(node=dict(label=[f"{n} · {int(va[(va.emb_reg == n) | (va.puerto == n) | (va.dest_cat == n)].shape[0])}" for n in nodes],
                                        color=ncol, pad=14, thickness=16), textfont=dict(color=NAVY, size=12),
-                             link=dict(source=s, target=t, value=v, color=col)))
+                             link=dict(source=src, target=tgt, value=val, color=col)))
     sk.update_layout(height=560, margin=dict(l=0, r=0, t=30, b=0), title="Vacíos: región de embarque → puerto chileno → destino (rojo = caliente)")
     st.plotly_chart(sk, use_container_width=True)
     st.markdown("**Vacíos con alertas**")
@@ -279,68 +323,210 @@ with tabs[2]:
 # ---------------------------------------------------------------- Lista caliente
 CAMPO_REGLA = {"sello_distinto": ["Sello"], "imo_plano_no_manif": ["IMO"], "pod_distinto": ["Puerto de descarga (POD)"], "peso_vgm": ["Peso (kg)"],
                "peso_mercancia": ["Peso (kg)", "Mercancía"], "lugar_llenado": ["Lugar de llenado"], "destino_cambiado": ["Destino final", "Destino original"],
+               "destino_bolivia": ["Destino final", "Destino original"],
                "vacio_pesado": ["Peso (kg)"], "vacio_sin_origen": ["Origen (ORI)"], "ultimo_lleno_riesgo": ["Último viaje lleno"],
                "bolivia_fuera_ruta": ["Destino final", "Puerto de descarga (POD)"], "deposito_externo": ["Depósito"], "no_manifestado": ["Lleno / vacío"]}
 ACCION = {"Rojo": "Coordinar con Aduana la revisión del contenedor (rayos X o aforo) antes del retiro o del embarque.",
           "Amarillo": "Revisión documental con la agencia o el cliente; aclarar la diferencia antes del cierre.",
           "Verde": "Flujo normal. Sin acción."}
+RESPONSABLES = [G.SIN_ASIGNAR] + list(G.EQUIPOS) + ([USUARIO] if USUARIO not in G.EQUIPOS else [])
+COLS_G = {"estado": "Estado", "responsable": "Responsable",
+          "fecha_aduana": st.column_config.DateColumn("Aduana", format="DD-MM", help="Fecha de coordinación con Aduana"),
+          "comentario": st.column_config.TextColumn("Comentario", width="medium"),
+          "actualizado": st.column_config.DatetimeColumn("Últ. cambio", format="DD-MM HH:mm"),
+          "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d",
+                                                   help=f"Suma de los puntos de las reglas que se disparan (tope 100). "
+                                                        f"Amarillo > {u_am} · Rojo > {u_ro}. La ficha muestra el cálculo.")}
+if st.session_state.pop("_guardado", None):
+    st.toast(st.session_state.pop("_guardado_msg", "Gestión guardada"), icon="✅")
+
+
+def ficha_contenedor(sel, pref):
+    """Ficha con el porqué del semáforo, la gestión editable y el cruce campo a campo."""
+    x = res.set_index("contenedor").loc[sel]
+    e = GEST.get(sel)
+    a, b = st.columns([1, 1.5])
+    with a:
+        st.markdown(f"<span class='pill' style='background:{SEM[x.semaforo]}'>{x.semaforo} · {x.score}</span> &nbsp; <b>{sel}</b>"
+                    + (f" &nbsp; <span class='pill' style='background:{G.COLOR_ESTADO[e['estado']]}'>{e['estado']}</span>" if e else "") + "<br>"
+                    f"<small>{x.puerto} · {x.flujo} · {x.nave} {x.viaje}<br>{'Desde' if x.flujo != 'Exportación' else 'Hacia'} {x.ext_nombre} → {x.destino}</small>",
+                    unsafe_allow_html=True)
+        st.markdown(f"<div class='expl'>🧮 <b>¿Por qué este color?</b><br>{M.explicar(x, params)}</div>", unsafe_allow_html=True)
+        st.markdown("**Qué está mal y por qué importa**")
+        for h in x.hits:
+            c_ = SEM["Rojo"] if h["puntos"] >= 40 else SEM["Amarillo"] if h["puntos"] >= 20 else "#9AA5B1"
+            st.markdown(f"<div class='hit' style='--c:{c_}'><b>+{h['puntos']} · {h['regla']}</b><br>{h['detalle']}<br>"
+                        f"<small>Cruce: {h['cruce']} — {M.REGLAS[h['id']]['why']}</small></div>", unsafe_allow_html=True)
+        if not x.hits: st.caption("Sin observaciones.")
+        st.info("**Acción sugerida:** " + ACCION[x.semaforo])
+    with b:
+        if e:
+            st.markdown("**Gestión del caso**")
+            if e["responsable"] != USUARIO and e["estado"] in G.ABIERTOS:
+                if st.button(f"🙋 Tomar este caso ({USUARIO})", key=f"{pref}_tomar_{sel}"):
+                    G.actualizar(GEST, sel, USUARIO, "En revisión MSC" if e["estado"] == "Nuevo" else e["estado"], USUARIO,
+                                 e["fecha_aduana"], f"Caso tomado por {USUARIO}.")
+                    st.session_state.update(_guardado=True, _guardado_msg=f"{sel} quedó a cargo de {USUARIO}")
+                    st.rerun()
+            with st.form(f"{pref}_form_{sel}", border=True):
+                c1, c2 = st.columns(2)
+                est = c1.selectbox("Estado", G.ESTADOS, index=G.ESTADOS.index(e["estado"]))
+                resp_opts = RESPONSABLES + ([e["responsable"]] if e["responsable"] not in RESPONSABLES else [])
+                resp = c2.selectbox("Responsable", resp_opts, index=resp_opts.index(e["responsable"]))
+                c3, c4 = st.columns([1, 2])
+                f_ad = c3.date_input("Coordinación con Aduana", value=e["fecha_aduana"], format="DD-MM-YYYY",
+                                     help="Si pasas a 'Coordinado con Aduana' sin fecha, queda la de hoy.")
+                com = c4.text_input("Comentario corto", max_chars=160, placeholder="Ej.: Aduana programa rayos X para mañana 9:00")
+                if st.form_submit_button("Guardar gestión", type="primary"):
+                    if G.actualizar(GEST, sel, USUARIO, est, resp, f_ad, com):
+                        st.session_state.update(_guardado=True, _guardado_msg=f"Gestión de {sel} guardada")
+                        st.rerun()
+                    else:
+                        st.caption("Sin cambios que guardar.")
+            with st.expander(f"Historial ({len(e['historial'])})", expanded=False):
+                for h in reversed(e["historial"]):
+                    st.markdown(f"<div class='hist'><b>{h['ts']:%d-%m %H:%M}</b> · {h['usuario']} · <b>{h['estado']}</b><br>{h['comentario']}</div>",
+                                unsafe_allow_html=True)
+        st.markdown("**Cruce campo a campo** (en naranja, los campos que no calzan)")
+        fi = M.ficha(docs, sel)
+        marcar = {c for h in x.hits for c in CAMPO_REGLA.get(h["id"], [])}
+        st.dataframe(fi.style.apply(lambda r: ["background-color:#FFE3D3" if r["Campo"] in marcar else "" for _ in r], axis=1),
+                     width="stretch", hide_index=True, height=min(38 * len(fi) + 40, 600))
+
+
+def selector(df, pref):
+    ix = df.set_index("contenedor")
+    return st.selectbox("Contenedor", df.contenedor, key=f"{pref}_sel",
+                        format_func=lambda c: f"{c} · {ix.loc[c, 'puerto']} · {ix.loc[c, 'semaforo']} {ix.loc[c, 'score']}"
+                                              + (f" · {ix.loc[c, 'estado']}" if pd.notna(ix.loc[c, 'estado']) else ""))
+
+
 with tabs[3]:
-    f1, f2, f3 = st.columns([1.2, 1.6, 1])
+    f1, f2, f3, f4, f5 = st.columns([1.1, 1.4, 1, 1.3, 1.2])
     sems = f1.multiselect("Semáforo", ["Rojo", "Amarillo", "Verde"], default=["Rojo", "Amarillo"])
     pts = f2.multiselect("Puertos", [p["name"] for p in M.PUERTOS], default=[], placeholder="Todos")
     fls = f3.multiselect("Flujo", M.FLUJOS, default=[], placeholder="Todos")
-    hot = res[res.semaforo.isin(sems)]
+    ests = f4.multiselect("Estado", G.ESTADOS, default=[], placeholder="Todos")
+    rsps = f5.multiselect("Responsable", RESPONSABLES, default=[], placeholder="Todos")
+    hot = t[t.semaforo.isin(sems)]
     if pts: hot = hot[hot.puerto.isin(pts)]
     if fls: hot = hot[hot.flujo.isin(fls)]
+    if ests: hot = hot[hot.estado.isin(ests)]
+    if rsps: hot = hot[hot.responsable.isin(rsps)]
     hot = hot.sort_values(["score", "puerto"], ascending=[False, True])
-    cols = ["semaforo", "score", "puerto", "contenedor", "flujo", "ext_nombre", "destino", "cliente", "tipo_cliente", "mercancia", "motivo"]
+    cols = ["semaforo", "score", "estado", "responsable", "fecha_aduana", "puerto", "contenedor", "flujo", "ext_nombre", "destino", "cliente",
+            "tipo_cliente", "mercancia", "motivo"]
     st.dataframe(hot[cols], width="stretch", hide_index=True, height=330,
-                 column_config={**COLS_ES, "ext_nombre": "Puerto extranjero"})
+                 column_config={**COLS_ES, **COLS_G, "ext_nombre": "Puerto extranjero"})
     d1, d2, _ = st.columns([1, 1, 3])
-    exp = hot[cols].rename(columns={"ext_nombre": "puerto_extranjero", "motivo": "por_que"})
+    exp = hot[cols + ["comentario"]].rename(columns={"ext_nombre": "puerto_extranjero", "motivo": "por_que", "fecha_aduana": "coordinacion_aduana"})
     d1.download_button("⬇️ Lista para Aduana (.xlsx)", a_excel({"lista_caliente": exp}), "L3B_lista_caliente.xlsx")
-    d2.download_button("⬇️ CSV", exp.to_csv(index=False).encode("utf-8-sig"), "L3B_lista_caliente.csv")
+    d2.download_button("⬇️ CSV", ("# PILOTO L3B - no es herramienta oficial de MSC - datos simulados\n" + exp.to_csv(index=False)).encode("utf-8-sig"),
+                       "L3B_lista_caliente.csv")
 
     st.subheader("Ficha del contenedor")
     if len(hot):
-        sel = st.selectbox("Contenedor", hot.contenedor, format_func=lambda c: f"{c} · {hot.set_index('contenedor').loc[c, 'puerto']} · score {hot.set_index('contenedor').loc[c, 'score']}")
-        x = res.set_index("contenedor").loc[sel]
-        a, b = st.columns([1, 1.5])
-        with a:
-            st.markdown(f"<span class='pill' style='background:{SEM[x.semaforo]}'>{x.semaforo} · {x.score}</span> &nbsp; <b>{sel}</b><br>"
-                        f"<small>{x.puerto} · {x.flujo} · {x.nave} {x.viaje}<br>{'Desde' if x.flujo != 'Exportación' else 'Hacia'} {x.ext_nombre} → {x.destino}</small>",
-                        unsafe_allow_html=True)
-            st.markdown("**Qué está mal y por qué importa**")
-            for h in x.hits:
-                c_ = SEM["Rojo"] if h["puntos"] >= 40 else SEM["Amarillo"] if h["puntos"] >= 20 else "#9AA5B1"
-                st.markdown(f"<div class='hit' style='--c:{c_}'><b>+{h['puntos']} · {h['regla']}</b><br>{h['detalle']}<br>"
-                            f"<small>Cruce: {h['cruce']} — {M.REGLAS[h['id']]['why']}</small></div>", unsafe_allow_html=True)
-            if not x.hits: st.caption("Sin observaciones.")
-            st.info("**Acción sugerida:** " + ACCION[x.semaforo])
-        with b:
-            st.markdown("**Cruce campo a campo** (en naranja, los campos que no calzan)")
-            fi = M.ficha(docs, sel)
-            marcar = {c for h in x.hits for c in CAMPO_REGLA.get(h["id"], [])}
-            st.dataframe(fi.style.apply(lambda r: ["background-color:#FFE3D3" if r["Campo"] in marcar else "" for _ in r], axis=1),
-                         width="stretch", hide_index=True, height=min(38 * len(fi) + 40, 600))
+        ficha_contenedor(selector(hot, "lc"), "lc")
     else:
         st.caption("No hay contenedores con esos filtros.")
+
+# ---------------------------------------------------------------- Mi gestión
+with tabs[4]:
+    con_casos = [r for r in RESPONSABLES if r != G.SIN_ASIGNAR]
+    tiene = (t.responsable == USUARIO).any()
+    defecto = USUARIO if tiene else "Equipo Biobío"
+    m1, m2 = st.columns([1.3, 2])
+    quien = m1.selectbox("Ver la gestión de", RESPONSABLES, index=RESPONSABLES.index(defecto) if defecto in RESPONSABLES else 0,
+                         help="Tu usuario, tu equipo o los casos sin asignar.")
+    vista = m2.radio("Mostrar", ["En seguimiento", "Todo", "Cerrados"], horizontal=True)
+    mio = t[(t.responsable == quien) & t.estado.notna()]
+    k_ = st.columns(5)
+    k_[0].metric("Casos a cargo", fmt(len(mio)))
+    k_[1].metric("🔴 Rojos abiertos", fmt(((mio.semaforo == "Rojo") & mio.estado.isin(G.ABIERTOS)).sum()))
+    k_[2].metric("En revisión", fmt((mio.estado == "En revisión MSC").sum()))
+    k_[3].metric("Coordinados con Aduana", fmt(mio.fecha_aduana.notna().sum()))
+    k_[4].metric("Cerrados", fmt(mio.estado.isin(G.CERRADOS).sum()))
+    if vista == "En seguimiento": mio = mio[mio.estado.isin(G.ABIERTOS)]
+    elif vista == "Cerrados": mio = mio[mio.estado.isin(G.CERRADOS)]
+    mio = mio.assign(_o=mio.estado.map({e: i for i, e in enumerate(G.ESTADOS)})).sort_values(["_o", "score"], ascending=[True, False])
+    if quien != G.SIN_ASIGNAR:
+        libres = t[(t.responsable == G.SIN_ASIGNAR) & (t.semaforo == "Rojo")
+                   & ((t.puerto_code.map(G.EQUIPO_PUERTO) == quien) | (quien not in G.EQUIPOS))]
+        if len(libres):
+            st.warning(f"Hay {len(libres)} rojo(s) sin asignar" + (f" en los puertos de {quien}" if quien in G.EQUIPOS else "") +
+                       ": " + ", ".join(libres.contenedor) + ". Tómalos desde la ficha.")
+    if len(mio):
+        st.dataframe(mio[["estado", "semaforo", "score", "fecha_aduana", "puerto", "contenedor", "flujo", "destino", "motivo", "comentario", "actualizado"]],
+                     width="stretch", hide_index=True, height=min(38 * len(mio) + 40, 380), column_config={**COLS_ES, **COLS_G})
+        st.subheader("Ficha del caso")
+        ficha_contenedor(selector(mio, "mg"), "mg")
+    else:
+        st.info("No hay casos en esta vista." + ("" if tiene or quien != USUARIO else " Toma uno desde la Lista caliente con «🙋 Tomar este caso»."))
+
+# ---------------------------------------------------------------- Seguimiento semanal
+with tabs[5]:
+    ini, fin = G.semana()
+    trab = t[t.estado.notna()]
+    R = G.resumen(trab)
+    st.markdown(f"#### Semana del {ini:%d-%m} al {fin:%d-%m-%Y}")
+    linea = (f"Esta semana el radar detectó {R['rojos']} contenedores en rojo y {R['amarillos']} en amarillo. "
+             f"Se coordinaron {R['coordinados']} revisiones con Aduana ({R['coordinados_rojos']} de los rojos) y se cerraron {R['cerrados']} casos: "
+             f"{R['con_hallazgo']} con hallazgo y {R['sin_hallazgo']} sin hallazgo. "
+             f"Quedan {R['rojos_abiertos']} rojos abiertos" + (f", {R['rojos_sin_asignar']} sin responsable." if R["rojos_sin_asignar"] else "."))
+    st.markdown(f"<div class='l3b-note' style='font-size:.95rem'>{linea}</div>", unsafe_allow_html=True)
+    k_ = st.columns(6)
+    k_[0].metric("🔴 Rojos detectados", fmt(R["rojos"]))
+    k_[1].metric("🟡 Amarillos", fmt(R["amarillos"]))
+    k_[2].metric("En revisión MSC", fmt(R["en_revision"]))
+    k_[3].metric("Coordinados con Aduana", fmt(R["coordinados"]))
+    k_[4].metric("Cerrados", fmt(R["cerrados"]), f"{R['con_hallazgo']} con hallazgo", delta_color="off")
+    k_[5].metric("Tasa de hallazgo", "—" if R["tasa_hallazgo"] is None else f"{R['tasa_hallazgo']:.0f}%",
+                 help="Cerrados con hallazgo / total de cerrados. Mide la puntería del radar.")
+    a, b = st.columns([1, 1.2])
+    with a:
+        rj = trab[trab.semaforo == "Rojo"]
+        etapas = ["Detectados", "Revisados por MSC", "Coordinados con Aduana", "Cerrados", "Con hallazgo"]
+        vals = [len(rj), int((rj.estado != "Nuevo").sum()), int(rj.fecha_aduana.notna().sum()), int(rj.estado.isin(G.CERRADOS).sum()),
+                int((rj.estado == "Cerrado · con hallazgo").sum())]
+        fu = go.Figure(go.Funnel(y=etapas, x=vals, textinfo="value", marker=dict(color=[SEM["Rojo"], "#C98A00", "#2A78D6", NAVY, "#7A1F16"])))
+        fu.update_layout(height=340, title="Rojos de la semana: de la alerta al resultado", margin=dict(l=0, r=10, t=40, b=0), plot_bgcolor="white")
+        st.plotly_chart(fu, use_container_width=True)
+    with b:
+        eq = trab.assign(equipo=trab.responsable.where(trab.responsable.isin(list(G.EQUIPOS) + [G.SIN_ASIGNAR]), "Usuarios"))
+        ge = eq.groupby(["equipo", "estado"]).size().unstack(fill_value=0)
+        bq = go.Figure()
+        for es in G.ESTADOS:
+            if es in ge: bq.add_bar(y=ge.index, x=ge[es], name=es, orientation="h", marker_color=G.COLOR_ESTADO[es])
+        bq.update_layout(barmode="stack", height=340, title="Alertas (rojas y amarillas) por responsable y estado", plot_bgcolor="white",
+                         legend=dict(orientation="h", y=-0.2), margin=dict(l=0, r=10, t=40, b=0))
+        st.plotly_chart(bq, use_container_width=True)
+    st.markdown("**Rojos de la semana**")
+    rj_cols = ["estado", "responsable", "fecha_aduana", "score", "puerto", "contenedor", "flujo", "destino", "motivo", "comentario"]
+    st.dataframe(rj.sort_values("score", ascending=False)[rj_cols], width="stretch", hide_index=True, column_config={**COLS_ES, **COLS_G})
+    resumen_df = pd.DataFrame([("Semana", f"{ini:%d-%m-%Y} al {fin:%d-%m-%Y}"), ("Rojos detectados", R["rojos"]), ("Amarillos", R["amarillos"]),
+                               ("En revisión MSC", R["en_revision"]), ("Coordinados con Aduana", R["coordinados"]), ("Cerrados", R["cerrados"]),
+                               ("Cerrados con hallazgo", R["con_hallazgo"]), ("Cerrados sin hallazgo", R["sin_hallazgo"]),
+                               ("Rojos abiertos", R["rojos_abiertos"]), ("Resumen", linea)], columns=["Indicador", "Valor"])
+    det = trab.sort_values(["semaforo", "score"], ascending=[False, False])[["semaforo"] + rj_cols].rename(
+        columns={"motivo": "por_que", "fecha_aduana": "coordinacion_aduana"})
+    st.download_button("⬇️ Reporte semanal (.xlsx)", a_excel({"resumen": resumen_df, "detalle": det}), f"L3B_reporte_semanal_{fin:%Y%m%d}.xlsx")
 
 # ---------------------------------------------------------------- Documentos
 QUIEN = {"plano": "Planners · BAPLIE de arribo y zarpe", "manifiesto": "Agencia · manifiesto EDI", "bookings": "Comercial · bookings",
          "terminal": "Terminal · registro de descarga y gate-in (sello, lugar de llenado)", "vacios": "Equipos · listado de vacíos (ORI, EMB, TRA, DES, FIN)",
          "clientes": "Comercial · maestro de clientes (embarques en 24 meses)"}
-with tabs[4]:
+with tabs[6]:
     doc = st.radio("Documento", M.DOCS, horizontal=True, format_func=lambda k: k.capitalize())
     st.caption(f"Entrega: {QUIEN[doc]} · {fmt(len(docs[doc]))} filas")
     st.dataframe(docs[doc], width="stretch", hide_index=True, height=480)
 
 # ---------------------------------------------------------------- Reglas
-with tabs[5]:
+with tabs[7]:
     rg = pd.DataFrame([dict(Regla=v["label"], Puntos=params["pesos"][k], Cruce=v["docs"], Disparos=int(sum(any(h["id"] == k for h in hs) for hs in res.hits)),
                             Por_qué=v["why"]) for k, v in M.REGLAS.items()]).sort_values("Puntos", ascending=False)
     st.dataframe(rg, width="stretch", hide_index=True, height=560, column_config={"Por_qué": st.column_config.TextColumn("Por qué", width="large")})
     st.caption(f"Semáforo: verde ≤ {u_am} · amarillo {u_am + 1}–{u_ro} · rojo > {u_ro}. "
-               "Venir de un puerto en lista roja o el perfil del cliente nunca dejan rojo por sí solos: debe existir una inconsistencia documental.")
+               "Venir de un puerto en lista roja o el perfil del cliente nunca dejan rojo por sí solos: debe existir una inconsistencia documental. "
+               "La ficha de cada contenedor muestra la suma que explica su color.")
 
 st.markdown(f"<hr><center><small style='color:{GREY}'>L3B · Logistic Living Lab · www.l3b.cl · Piloto con datos ficticios</small></center>", unsafe_allow_html=True)
