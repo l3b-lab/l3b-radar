@@ -46,6 +46,7 @@ def usuarios():
 
 # Invitados de la demo. El repo es público: aquí solo va la huella de la clave (PBKDF2), nunca la clave.
 INVITADOS = {
+    "daniel": ("668382f4ee139382", "a51e2808cfe983dea7e2583fb8f677b8669a1e78e860c58a30e1a94a74376f1c"),
     "julio": ("c247a11b01a964ff", "c4fe68846d04296cae0ecfc6188745eab8b016a98cd7cc814d6d7488dc0b8695"),
 }
 
