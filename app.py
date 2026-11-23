@@ -3,8 +3,10 @@ Radar Chile–Bolivia · Piloto en Streamlit
 L3B · Logistic Living Lab · www.l3b.cl
 Datos 100% simulados. Ejecutar:  streamlit run app.py
 """
+import hashlib
 import io
 import json
+import pathlib
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -115,13 +117,17 @@ El radar cruza plano (BAPLIE), manifiesto, bookings, registro de terminal y list
 
 
 # ---------------------------------------------------------------- datos
+# Huella del código del motor: si cambia (nuevo deploy), se descartan los datos guardados en caché.
+VERSION = hashlib.md5(b"".join(pathlib.Path(__file__).with_name(f).read_bytes() for f in ("motor.py", "gestion.py"))).hexdigest()[:8]
+
+
 @st.cache_data(show_spinner="Generando semana simulada…")
-def docs_simulados(seed):
+def docs_simulados(seed, version=VERSION):
     return M.generar(seed)
 
 
 @st.cache_data(show_spinner="Cruzando documentos…")
-def correr(docs, params_json):
+def correr(docs, params_json, version=VERSION):
     return M.analizar(docs, json.loads(params_json))
 
 
@@ -197,6 +203,7 @@ def almacen():
 
 
 GESTIONES = almacen()
+clave = f"{clave}-{VERSION}"
 if clave not in GESTIONES:
     GESTIONES[clave] = G.simular(res, seed) if seed is not None else {}
 GEST = G.registro(GESTIONES[clave], res)
@@ -223,7 +230,7 @@ k[4].metric("Vacíos", fmt((res.flujo == "Vacío").sum()))
 nr, na = (res.semaforo == "Rojo").sum(), (res.semaforo == "Amarillo").sum()
 k[5].metric("🔴 Calientes", fmt(nr), f"{fmt(na)} en amarillo", delta_color="off")
 
-tabs = st.tabs(["🗺️ Panorama", "🇧🇴 Bolivia", "📦 Vacíos", "🔥 Lista caliente", "👤 Mi gestión", "📊 Seguimiento semanal", "📄 Documentos", "⚙️ Reglas"])
+tabs = st.tabs(["🗺️ Panorama", "🏔️ Bolivia", "📦 Vacíos", "🔥 Lista caliente", "👤 Mi gestión", "📊 Seguimiento semanal", "📄 Documentos", "⚙️ Reglas"])
 
 # ---------------------------------------------------------------- Panorama
 with tabs[0]:
