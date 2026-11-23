@@ -44,6 +44,22 @@ def usuarios():
         return {}
 
 
+# Invitados de la demo. El repo es público: aquí solo va la huella de la clave (PBKDF2), nunca la clave.
+INVITADOS = {
+    "julio": ("c247a11b01a964ff", "c4fe68846d04296cae0ecfc6188745eab8b016a98cd7cc814d6d7488dc0b8695"),
+}
+
+
+def clave_ok(u, p):
+    users = usuarios()
+    if u in users:
+        return hmac.compare_digest(p, users[u])
+    if u in INVITADOS:
+        sal, huella = INVITADOS[u]
+        return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", p.encode(), bytes.fromhex(sal), 200_000).hex(), huella)
+    return False
+
+
 def pantalla_acceso():
     st.markdown(f"""
 <style>
@@ -72,10 +88,9 @@ def pantalla_acceso():
         ok = st.form_submit_button("Ingresar", type="primary")
     st.markdown("<div class='acc-foot'>www.l3b.cl · ¿Sin acceso? Escribe a mrojo@l3b.cl</div>", unsafe_allow_html=True)
     if ok:
-        users = usuarios()
-        if not users:
+        if not usuarios() and not INVITADOS:
             st.error("La app no tiene usuarios configurados (falta la sección [usuarios] en Secrets).")
-        elif u.strip().lower() in users and hmac.compare_digest(p, users[u.strip().lower()]):
+        elif clave_ok(u.strip().lower(), p):
             st.session_state["usuario"] = u.strip().lower()
             st.rerun()
         else:
